@@ -1,0 +1,192 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Launch ec2 instance for deploy production environment and manager database
+
+Parameters:
+  EnvironmentName:  # require
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+  Suffixes:
+    Description: Suffixes to resource names
+    Type: String
+    Default: api
+  InstanceType:
+    Description: Instance type ec2
+    Type: String
+    Default: t2.micro
+  ImageId:
+    Description: ImageId of Amazon Machine Image (AMI) # recommend Ubuntu Server 20.04 LTS (HVM)
+    Type: String
+  KeyPair:  # require
+    Description: Name of .pem file for ssh
+    Type: String
+  GitlabHost:
+    Description: Host url of gitlab
+    Type: String
+    Default: https://git.amela.vn/
+  GitlabRegistrationToken: # require
+    Description: Gitlab runner registration token
+    Type: String
+  GitlabRunnerTag:
+    Description: Gitlab runner tag
+    Type: String
+    Default: production-runner
+  FolderWorkspace:
+    Description: Workspace for deploy
+    Type: String
+    Default: server
+
+Resources:
+  UserExecuteCICD:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub "${EnvironmentName}-exec-cicd"
+      Policies:
+        - PolicyName: policy-exec-cicd
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - ecr:*
+                  - ecs:*
+                  - iam:*
+                  - cloudformation:*
+                  - logs:*
+                  - cloudwatch:*
+                  - application-autoscaling:*
+                  - s3:getObject
+                Resource: "*"
+
+  UserExecuteCICDAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      Status: Active
+      UserName: !Ref UserExecuteCICD
+
+  EC2Deploy:
+    Type: AWS::EC2::Instance
+    Properties:
+      KeyName: !Ref KeyPair
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref ImageId
+      SubnetId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-vpc-PublicSubnet1"
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeType: gp2
+            VolumeSize: 20
+            DeleteOnTermination: true
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}-security-groups-sg-database
+      Tags:
+        - Key: Name
+          Value: !Sub "${EnvironmentName} CICD and manager database"
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            # swap 1G ram
+            sudo fallocate -l 1G /swapfile
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+            # install gitlab-runner
+            sudo curl -L --output /usr/local/bin/gitlab-runner https://gitlab-runner-downloads.s3.amazonaws.com/latest/binaries/gitlab-runner-linux-amd64
+            sudo chmod +x /usr/local/bin/gitlab-runner
+            sudo useradd --comment 'GitLab Runner' --create-home gitlab-runner --shell /bin/bash
+            sudo gitlab-runner install --user=gitlab-runner --working-directory=/home/gitlab-runner
+            sudo gitlab-runner start
+            sudo gitlab-runner register -n --url "${GitlabHost}" --registration-token "${GitlabRegistrationToken}" --executor "shell" --name "${GitlabRunnerTag}" --tag-list "${GitlabRunnerTag}"
+            sudo mkdir -p /home/ubuntu/${FolderWorkspace}
+            sudo chmod 777 /home/ubuntu/${FolderWorkspace}
+            sudo rm -rf /home/gitlab-runner/.bash_logout
+            # install aws cli
+            sudo apt update
+            sudo apt -y install unzip
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            sudo ./aws/install
+            # install docker
+            sudo apt -y install apt-transport-https ca-certificates curl software-properties-common
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+            sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable"
+            apt-cache policy docker-ce
+            sudo apt -y install docker-ce
+            sudo usermod -aG docker gitlab-runner
+            # config ecs
+            sudo apt -y install jq
+            echo -e "echo -e '\e[1;32mcd /home/ubuntu/${FolderWorkspace}\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "cd /home/ubuntu/${FolderWorkspace}" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32maws ecr get-login-password --region ${AWS::Region} --profile ${EnvironmentName}| docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "aws ecr get-login-password --region ${AWS::Region} --profile ${EnvironmentName}| docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32mdocker build -t ${ecrName} .\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "docker build -t ${ecrName} ." >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32mdocker tag ${ecrName}:latest ${ecrUri}:latest\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "docker tag ${ecrName}:latest ${ecrUri}:latest" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32mdocker push ${ecrUri}:latest\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "docker push ${ecrUri}:latest" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32mrm -rf /home/ubuntu/${FolderWorkspace}/task-definition-temp.json\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "rm -rf /home/ubuntu/${FolderWorkspace}/task-definition-temp.json" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32mrm -rf /home/ubuntu/${FolderWorkspace}/task-definition.json\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "rm -rf /home/ubuntu/${FolderWorkspace}/task-definition.json" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32maws ecs describe-task-definition --profile ${EnvironmentName} --task-definition ${EnvironmentName}-${Suffixes} >> /home/ubuntu/${FolderWorkspace}/task-definition-temp.json\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "aws ecs describe-task-definition --profile ${EnvironmentName} --task-definition ${EnvironmentName}-${Suffixes} >> /home/ubuntu/${FolderWorkspace}/task-definition-temp.json" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "if grep -q "\"taskDefinition\"" /home/ubuntu/${FolderWorkspace}/task-definition-temp.json; then" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32mcd /home/ubuntu/${FolderWorkspace}\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "cd /home/ubuntu/${FolderWorkspace}" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32mjq '{containerDefinitions: .taskDefinition.containerDefinitions, family: .taskDefinition.family, executionRoleArn: .taskDefinition.executionRoleArn, networkMode: .taskDefinition.networkMode, volumes: .taskDefinition.volumes, placementConstraints: .taskDefinition.placementConstraints, runtimePlatform: .taskDefinition.runtimePlatform, requiresCompatibilities: .taskDefinition.requiresCompatibilities, cpu: .taskDefinition.cpu, memory: .taskDefinition.memory}' /home/ubuntu/${FolderWorkspace}/task-definition-temp.json >> /home/ubuntu/${FolderWorkspace}/task-definition.json\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "jq '{containerDefinitions: .taskDefinition.containerDefinitions, family: .taskDefinition.family, executionRoleArn: .taskDefinition.executionRoleArn, networkMode: .taskDefinition.networkMode, volumes: .taskDefinition.volumes, placementConstraints: .taskDefinition.placementConstraints, runtimePlatform: .taskDefinition.runtimePlatform, requiresCompatibilities: .taskDefinition.requiresCompatibilities, cpu: .taskDefinition.cpu, memory: .taskDefinition.memory}' /home/ubuntu/${FolderWorkspace}/task-definition-temp.json >> /home/ubuntu/${FolderWorkspace}/task-definition.json" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32maws ecs register-task-definition --region ${AWS::Region} --profile ${EnvironmentName} --family ${EnvironmentName}-${Suffixes} --requires-compatibilities FARGATE --cli-input-json file://task-definition.json\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "aws ecs register-task-definition --region ${AWS::Region} --profile ${EnvironmentName} --family ${EnvironmentName}-${Suffixes} --requires-compatibilities FARGATE --cli-input-json file://task-definition.json" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32maws ecs update-service --region ${AWS::Region} --profile ${EnvironmentName} --cluster ${EnvironmentName}-cluster --service ${EnvironmentName}-${Suffixes} --task-definition ${EnvironmentName}-${Suffixes}\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "aws ecs update-service --region ${AWS::Region} --profile ${EnvironmentName} --cluster ${EnvironmentName}-cluster --service ${EnvironmentName}-${Suffixes} --task-definition ${EnvironmentName}-${Suffixes}" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "else" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32mcd /home/ubuntu/${FolderWorkspace}\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "cd /home/ubuntu/${FolderWorkspace}" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32maws s3 cp s3://${s3TemplateBucket}/ecs-service.yaml . --profile ${EnvironmentName}\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "aws s3 cp s3://${s3TemplateBucket}/ecs-service.yaml . --profile ${EnvironmentName}" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32maws cloudformation deploy --stack-name ${EnvironmentName}-${Suffixes}-ecs-service --template-file ecs-service.yaml --profile ${EnvironmentName} --parameter-overrides EnvironmentName=${EnvironmentName} Suffixes=${Suffixes} --capabilities CAPABILITY_NAMED_IAM --region ${AWS::Region}\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "aws cloudformation deploy --stack-name ${EnvironmentName}-${Suffixes}-ecs-service --template-file ecs-service.yaml --profile ${EnvironmentName} --parameter-overrides EnvironmentName=${EnvironmentName} Suffixes=${Suffixes} --capabilities CAPABILITY_NAMED_IAM --region ${AWS::Region}" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "fi" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32mdocker rmi -f ${ecrUri}\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "docker rmi -f ${ecrUri}" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "echo -e '\e[1;32mdocker rmi -f ${ecrName}\e[1;m'" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            echo -e "docker rmi -f ${ecrName}" >> /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            sudo chmod +x /home/ubuntu/${FolderWorkspace}/exec-ecs.sh
+            # config aws profile
+            sudo rm -rf /home/gitlab-runner/.aws
+            sudo mkdir -p /home/gitlab-runner/.aws
+            sudo echo -e "[profile ${EnvironmentName}]\nregion = ${AWS::Region}" >> /home/gitlab-runner/.aws/config
+            sudo echo -e "[${EnvironmentName}]\naws_access_key_id = ${accessKey}\naws_secret_access_key = ${secretKey}" >> /home/gitlab-runner/.aws/credentials
+            sudo rm -rf /home/ubuntu/.aws
+            sudo mkdir -p /home/ubuntu/.aws
+            sudo echo -e "[profile ${EnvironmentName}]\nregion = ${AWS::Region}" >> /home/ubuntu/.aws/config
+            sudo echo -e "[${EnvironmentName}]\naws_access_key_id = ${accessKey}\naws_secret_access_key = ${secretKey}" >> /home/ubuntu/.aws/credentials
+            # excute custom-bash.sh
+            aws s3 cp s3://${s3TemplateBucket}/custom-bash.sh /home/ubuntu/custom-bash.sh --profile ${EnvironmentName}
+            sudo chmod +x /home/ubuntu/custom-bash.sh
+            /home/ubuntu/custom-bash.sh ${EnvironmentName} ${Suffixes} ${FolderWorkspace}
+          - ecrUri:
+              Fn::ImportValue: !Sub "${EnvironmentName}-ecr-${Suffixes}-ECRUri"
+            ecrName:
+              Fn::ImportValue: !Sub "${EnvironmentName}-ecr-${Suffixes}-ECRRepoName"
+            accessKey: !Ref UserExecuteCICDAccessKey
+            secretKey: !GetAtt UserExecuteCICDAccessKey.SecretAccessKey
+            s3TemplateBucket:
+              Fn::ImportValue: !Sub "${EnvironmentName}-s3-S3TemplateBucket"
+
+  EC2DeployEIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-vpc-EC2DeployEIPAllocationId"
+      InstanceId: !Ref EC2Deploy
+
+Outputs:
+  EC2Deploy:
+    Description: EC2 Instance for deploy and manager database production
+    Value: !Ref EC2Deploy
+    Export:
+      Name: !Sub "${AWS::StackName}-EC2Deploy"

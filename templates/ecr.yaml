@@ -1,0 +1,34 @@
+Description: >
+  This template create ECR
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+  Suffixes:
+    Description: Suffixes to resource names
+    Type: String
+    Default: api
+
+Resources:
+  ECR:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${EnvironmentName}-${Suffixes}"
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+Outputs:
+  ECRUri:
+    Description: ECR RepositoryUri
+    Value: !GetAtt ECR.RepositoryUri
+    Export:
+      Name: !Sub "${AWS::StackName}-ECRUri"
+  ECRRepoName:
+    Description: ECR resource name
+    Value: !Ref ECR
+    Export:
+      Name: !Sub "${AWS::StackName}-ECRRepoName"

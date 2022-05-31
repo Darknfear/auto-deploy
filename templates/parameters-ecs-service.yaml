@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  This is template export output is parameter for ecs-service
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+  Suffixes:
+    Description: Suffixes to resource names
+    Type: String
+    Default: api
+  DesiredCount:
+    Description: How many instances of this task should we run across our cluster?
+    Type: Number
+    Default: 1
+  MaxCount:
+    Description: Maximum number of instances of this task we can run across our cluster
+    Type: Number
+    Default: 100
+  ContainerPort:
+    Description: The port on the container to associate with the load balancer
+    Type: Number
+    Default: 3000
+  TaskCPU:
+    Description: Specify the amount of CPU to reserve for the task. The CPU value is specified as a number of vCPUs
+    Type: Number
+    Default: 2048
+  TaskMemory:
+    Description: Specify the amount of memory to reserve for the task. The memory value is specified in GB
+    Type: Number
+    Default: 4096
+
+Conditions:
+  Never:
+    !Equals [ "A", "B" ]
+
+Resources:
+  NonResource:
+    Type: Custom::NonResource
+    Condition: Never
+
+Outputs:
+  DesiredCount:
+    Description: How many instances of this task should we run across our cluster?
+    Value: !Ref DesiredCount
+    Export:
+      Name: !Sub "${AWS::StackName}-DesiredCount"
+  MaxCount:
+    Description: Maximum number of instances of this task we can run across our cluster
+    Value: !Ref MaxCount
+    Export:
+      Name: !Sub "${AWS::StackName}-MaxCount"
+  ContainerPort:
+    Description: The port on the container to associate with the load balancer
+    Value: !Ref ContainerPort
+    Export:
+      Name: !Sub "${AWS::StackName}-ContainerPort"
+  TaskCPU:
+    Description: Specify the amount of CPU to reserve for the task. The CPU value is specified as a number of vCPUs
+    Value: !Ref TaskCPU
+    Export:
+      Name: !Sub "${AWS::StackName}-TaskCPU"
+  TaskMemory:
+    Description: Specify the amount of memory to reserve for the task. The memory value is specified in GB
+    Value: !Ref TaskMemory
+    Export:
+      Name: !Sub "${AWS::StackName}-TaskMemory"

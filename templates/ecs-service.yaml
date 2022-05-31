@@ -1,0 +1,149 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  This is an example of a long running ECS service that needs to connect to another ECS service (product-service)
+  via it's load balancer. We use environment variables to pass the URL of the product-service to this one's container(s).
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+  Suffixes:
+    Description: Suffixes to resource names
+    Type: String
+    Default: api
+
+Resources:
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${EnvironmentName}-${Suffixes}
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - Fn::ImportValue: !Sub ${EnvironmentName}-security-groups-sg-ecs
+          Subnets: !Split
+            - ","
+            - Fn::ImportValue: !Sub "${EnvironmentName}-vpc-PrivateSubnets"
+      Cluster:
+        Fn::ImportValue: !Sub ${EnvironmentName}-ECSCluster
+      DesiredCount:
+        Fn::ImportValue: !Sub ${EnvironmentName}-parameters-ecs-service-${Suffixes}-DesiredCount
+      TaskDefinition: !Ref TaskDefinition
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+      LoadBalancers:
+        - ContainerName: !Sub "${EnvironmentName}-${Suffixes}"
+          ContainerPort:
+            Fn::ImportValue: !Sub ${EnvironmentName}-parameters-ecs-service-${Suffixes}-ContainerPort
+          TargetGroupArn:
+            Fn::ImportValue: !Sub "${EnvironmentName}-load-balancers-${Suffixes}-TargetGroup"
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-${Suffixes}
+      Cpu:
+        Fn::ImportValue: !Sub ${EnvironmentName}-parameters-ecs-service-${Suffixes}-TaskCPU
+      Memory:
+        Fn::ImportValue: !Sub ${EnvironmentName}-parameters-ecs-service-${Suffixes}-TaskMemory
+      NetworkMode: awsvpc
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !Ref ECSTaskExecutionRole
+      ContainerDefinitions:
+        - Name: !Sub ${EnvironmentName}-${Suffixes}
+          Essential: true
+          Image: !Sub
+            - ${ecrUri}:latest
+            - ecrUri:
+                Fn::ImportValue: !Sub "${EnvironmentName}-ecr-${Suffixes}-ECRUri"
+          PortMappings:
+            - ContainerPort:
+                Fn::ImportValue: !Sub ${EnvironmentName}-parameters-ecs-service-${Suffixes}-ContainerPort
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CloudWatchLogsGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Ref CloudWatchLogsGroup
+
+  CloudWatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Ref AWS::StackName
+      RetentionInDays: 90
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [ecs-tasks.amazonaws.com]
+            Action: ["sts:AssumeRole"]
+      Path: /
+      Policies:
+        - PolicyName: AmazonECSTaskExecutionRolePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:GetAuthorizationToken
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  ServiceScalableTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity:
+        Fn::ImportValue: !Sub ${EnvironmentName}-parameters-ecs-service-${Suffixes}-MaxCount
+      MinCapacity:
+        Fn::ImportValue: !Sub ${EnvironmentName}-parameters-ecs-service-${Suffixes}-DesiredCount
+      ResourceId: !Sub
+        - service/${ecsCluster}/${serviceName}
+        - serviceName: !GetAtt Service.Name
+          ecsCluster:
+            Fn::ImportValue: !Sub ${EnvironmentName}-ECSCluster
+      RoleARN:
+        Fn::ImportValue: !Sub ${EnvironmentName}-ecs-cluster-ECSServiceAutoScalingRole
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  ServiceScaleByCPUPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-autoscaling-cpu
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ServiceScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        DisableScaleIn: false
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 300
+        TargetValue: 70
+
+  ServiceScaleByMemoryPolicy:
+    Type: "AWS::ApplicationAutoScaling::ScalingPolicy"
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-autoscaling-memory
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ServiceScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        DisableScaleIn: false
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageMemoryUtilization
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 300
+        TargetValue: 70

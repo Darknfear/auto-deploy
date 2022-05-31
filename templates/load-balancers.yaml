@@ -1,0 +1,100 @@
+Description: >
+  This template deploys an Application Load Balancer that exposes our various ECS services.
+  We create them in a seperate nested template, so it can be referenced by all of the other nested templates.
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+  Suffixes:
+    Description: Suffixes to resource names
+    Type: String
+    Default: api
+  HealthCheckPath:
+    Description: Health check path
+    Type: String
+    Default: /api/health-check
+  AppPort:
+    Description: Container port of ecs
+    Type: Number
+    Default: 3000
+
+Resources:
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${EnvironmentName}-${Suffixes}
+      Subnets: !Split
+        - ","
+        - Fn::ImportValue: !Sub "${EnvironmentName}-vpc-PublicSubnets"
+      SecurityGroups: !Split
+        - ","
+        - Fn::ImportValue: !Sub "${EnvironmentName}-security-groups-sg-lb"
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # We define a default target group here, as this is a mandatory Parameters
+  # when creating an Application Load Balancer Listener. This is not used, instead
+  # a target group is created per-service in each service template (../services/*)
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-${Suffixes}-tg
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-vpc-VPCID"
+      TargetType: ip
+      Port: 80
+      Protocol: HTTP
+      HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: 60
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckPort: !Ref AppPort
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 30
+
+Outputs:
+  LoadBalancer:
+    Description: A reference to the Application Load Balancer
+    Value: !Ref LoadBalancer
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancer"
+
+  LoadBalancerDNS:
+    Description: The URL of the ALB
+    Value: !GetAtt LoadBalancer.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerDNS"
+
+  LoadBalancerFullName:
+    Description: Full name of the ALB
+    Value: !GetAtt LoadBalancer.LoadBalancerFullName
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerFullName"
+
+  Listener:
+    Description: A reference to a port 80 listener
+    Value: !Ref LoadBalancerListener
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerListener"
+
+  TargetGroup:
+    Description: Target group ecs
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-TargetGroup"
+
+  TargetGroupFullName:
+    Description: Target group full name ecs
+    Value: !GetAtt TargetGroup.TargetGroupFullName
+    Export:
+      Name: !Sub "${AWS::StackName}-TargetGroupFullName"

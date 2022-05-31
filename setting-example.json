@@ -1,0 +1,40 @@
+{
+    "AwsProfile": "",
+    "EnvironmentName": "",
+    "Suffixes": "api",
+    "Region": "ap-northeast-1",
+    "Vpc": {
+        "VpcCIDR": "10.180.0.0/16",
+        "PublicSubnet1CIDR": "10.180.8.0/21",
+        "PublicSubnet2CIDR": "10.180.16.0/21",
+        "PublicSubnet3CIDR": "10.180.24.0/21",
+        "PrivateSubnet1CIDR": "10.180.32.0/21",
+        "PrivateSubnet2CIDR": "10.180.40.0/21",
+        "PrivateSubnet3CIDR": "10.180.48.0/21"
+    },
+    "S3": {},
+    "SecurityGroups": {},
+    "LoadBalancers": {
+        "AppPort": 3000,
+        "HealthCheckPath": "/api/health-check"
+    },
+    "ECR": {},
+    "ECSCluster": {},
+    "EC2": {
+        "InstanceType": "t2.micro",
+        "ImageId": "",
+        "KeyPair": "",
+        "GitlabHost": "https://git.amela.vn/",
+        "GitlabRegistrationToken": "",
+        "GitlabRunnerTag": "production-runner",
+        "FolderWorkspace": "server"
+    },
+    "ECSService": {},
+    "ParameterECSService": {
+        "DesiredCount": 1,
+        "MaxCount": 100,
+        "ContainerPort": 3000,
+        "TaskCPU": 1024,
+        "TaskMemory": 2048
+    }
+}
